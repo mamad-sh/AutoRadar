@@ -2,6 +2,7 @@ import requests
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from queue import Queue
+import mysql.connector
 
 
 def get_detail(car):
@@ -15,7 +16,7 @@ def get_detail(car):
     brand_fa = detail["brand_fa"]
     trim = detail["trim"]
     title = detail["title"]
-    year = detail["year"]
+    year = int(detail["year"])
     mileage = detail["mileage"]
     location = detail["location"]
     body_color = detail["body_color"]
@@ -31,6 +32,10 @@ def get_detail(car):
         dealer_id = car["dealer"]["id"]
     else:
         dealer_id = None
+    try:
+        mileage = int(detail["mileage"].replace(",", "").replace("km", ""))
+    except:
+        mileage = 0
 
     # end detail
     details.put(
@@ -70,6 +75,7 @@ def get_price(car):
     delivery_days = price_dict["delivery_days"]
     month_number = price_dict["month_number"]
     price = int(price.replace(",", ""))
+
     prices.put(
         (
             code,
@@ -99,24 +105,34 @@ def get_dealer(car):
         score = dealer["score"]
         id = dealer["id"]
         address = dealer["address"]
-    dealers.put((id, address, dealer_name, score, dealer_type))
+        dealers.put((id, address, dealer_name, score, dealer_type))
+    else:
+        return
 
 
 def all_cars_detail():
     with ThreadPoolExecutor(max_workers=3) as executer:
         while True:
+
             car = cars.get()
+
             if car is None:
+
+                dealers.put(None)
+                prices.put(None)
+                details.put(None)
                 cars.task_done()
                 break
 
             dealer_future = executer.submit(get_dealer, car)
             detail_future = executer.submit(get_detail, car)
+
             price_future = executer.submit(get_price, car)
 
             detail_future.result()
             dealer_future.result()
             price_future.result()
+
             cars.task_done()
 
 
@@ -134,20 +150,172 @@ def ads_car(page):
             cars.put(car)
 
 
-with ThreadPoolExecutor(max_workers=2) as executer:
+def insert_into_dealers():
+
+    q = """
+    INSERT INTO dealers (id, address, name, score, type)
+    VALUES(%s,%s,%s,%s,%s) ON DUPLICATE KEY UPDATE 
+        address = VALUES(address),
+        name = VALUES(name),
+        score = VALUES(score),
+        type = VALUES(type)
+    """
+    cnx = mysql.connector.connect(
+        host="127.0.0.1", user="root", password="m13910110sh", database="autocar"
+    )
+    while True:
+        dealer = dealers.get()
+
+        if dealer is None:
+
+            dealers.task_done()
+            cnx.close()
+            break
+
+        cursor = cnx.cursor()
+        cursor.execute(q, dealer)
+        cnx.commit()
+        cursor.close()
+
+        dealers.task_done()
+
+
+def insert_into_details():
+
+    q = """
+    INSERT INTO cars (
+    code,
+    brand,
+    brand_fa,
+    trim,
+    title,
+    year,
+    mileage,
+    location,
+    body_color,
+    body_status,
+    body_type,
+    body_type_fa,
+    fuel,
+    transmission,
+    description,
+    url,
+    modified_date,
+    dealer_id
+    )
+    VALUES (
+    %s, %s, %s, %s, %s,
+    %s, %s, %s, %s, %s,
+    %s, %s, %s, %s, %s,
+    %s, %s, %s
+    )
+    ON DUPLICATE KEY UPDATE
+        brand = VALUES(brand),
+        brand_fa = VALUES(brand_fa),
+        trim = VALUES(trim),
+        title = VALUES(title),
+        year = VALUES(year),
+        mileage = VALUES(mileage),
+        location = VALUES(location),
+        body_color = VALUES(body_color),
+        body_status = VALUES(body_status),
+        body_type = VALUES(body_type),
+        body_type_fa = VALUES(body_type_fa),
+        fuel = VALUES(fuel),
+        transmission = VALUES(transmission),
+        description = VALUES(description),
+        url = VALUES(url),
+        modified_date = VALUES(modified_date),
+        dealer_id = VALUES(dealer_id)
+    """
+    cnx = mysql.connector.connect(
+        host="127.0.0.1", user="root", password="m13910110sh", database="autocar"
+    )
+    while True:
+        detail = details.get()
+
+        if detail is None:
+
+            details.task_done()
+            cnx.close()
+            break
+        cursor = cnx.cursor()
+        cursor.execute(q, detail)
+
+        cnx.commit()
+        cursor.close()
+        details.task_done()
+
+
+def insert_into_prices():
+
+    q = """
+    INSERT INTO prices (
+        car_code,
+        type,
+        price,
+        prepayment,
+        payment,
+        prepayment_primary,
+        prepayment_secondary,
+        payment_primary,
+        delivery_days,
+        month_number
+        ) 
+    VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) ON DUPLICATE KEY UPDATE 
+        type = VALUES(type),
+        price = VALUES(price),
+        prepayment = VALUES(prepayment),
+        payment = VALUES(payment),
+        prepayment_primary = VALUES(prepayment_primary),
+        prepayment_secondary = VALUES(prepayment_secondary),
+        payment_primary = VALUES(payment_primary),
+        delivery_days = VALUES(delivery_days),
+        month_number = VALUES(month_number)
+    """
+    cnx = mysql.connector.connect(
+        host="127.0.0.1", user="root", password="m13910110sh", database="autocar"
+    )
+    while True:
+
+        price = prices.get()
+        print("start")
+        if price is None:
+            print("end")
+
+            cnx.close()
+            prices.task_done()
+            break
+
+        cursor = cnx.cursor()
+
+        cursor.execute(q, price)
+        cnx.commit()
+        print("commit")
+        cursor.close()
+
+        prices.task_done()
+
+
+with ThreadPoolExecutor(max_workers=3) as executer:
     cars = Queue()
     details = Queue()
     prices = Queue()
     dealers = Queue()
     futures = []
     executer.submit(all_cars_detail)
-    for i in range(0, 1):
-        future = executer.submit(ads_car, 0)
+    for i in range(0, 4):
+        future = executer.submit(ads_car, i)
         futures.append(future)
 
     for future in futures:
         future.result()
     cars.put(None)
-    cars.join()
 
-    print(list(details.queue), list(prices.queue), list(dealers.queue))
+    executer.submit(insert_into_dealers)
+    dealers.join()
+    executer.submit(insert_into_details)
+
+    details.join()
+    executer.submit(insert_into_prices)
+    prices.join()
