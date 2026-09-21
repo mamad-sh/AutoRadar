@@ -1,6 +1,6 @@
 import requests
 from datetime import datetime
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor
 from queue import Queue
 import mysql.connector
 
@@ -74,7 +74,13 @@ def get_price(car):
     payment_primary = price_dict["payment_primary"]
     delivery_days = price_dict["delivery_days"]
     month_number = price_dict["month_number"]
+    # Normalize price fields to integers for comparison in insert_into_prices
     price = int(price.replace(",", ""))
+    prepayment = int(prepayment.replace(",", ""))
+    prepayment_primary = int(prepayment_primary.replace(",", ""))
+    prepayment_secondary = int(prepayment_secondary.replace(",", ""))
+    payment = int(payment.replace(",", ""))
+    payment_primary = int(payment_primary.replace(",", ""))
 
     prices.put(
         (
@@ -248,8 +254,30 @@ def insert_into_details():
 
 
 def insert_into_prices():
-
-    q = """
+    query_insert_to_history = """
+    INSERT INTO price_history (
+        car_code,
+        type,
+        price,
+        prepayment,
+        payment,
+        prepayment_primary,
+        prepayment_secondary,
+        payment_primary,
+        delivery_days,
+        month_number,
+        recorded_at
+    )
+    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s);
+    """
+    query_find_last_snapshot = """
+    SELECT *
+    FROM price_history
+    WHERE car_code = %s
+    ORDER BY recorded_at DESC
+    LIMIT 1;
+    """
+    query_insert_to_prices = """
     INSERT INTO prices (
         car_code,
         type,
@@ -276,22 +304,43 @@ def insert_into_prices():
     cnx = mysql.connector.connect(
         host="127.0.0.1", user="root", password="m13910110sh", database="autocar"
     )
+
     while True:
 
         price = prices.get()
-        print("start")
+
         if price is None:
-            print("end")
 
             cnx.close()
             prices.task_done()
+
             break
 
+        # cursors
         cursor = cnx.cursor()
+        cursor_history = cnx.cursor()
 
-        cursor.execute(q, price)
+        # get last snapshot
+        cursor_history.execute(query_find_last_snapshot, (price[0],))
+        last_history = cursor_history.fetchone()
+
+        # check last snapshot is none if not slice it
+        if last_history is not None:
+            last_history = last_history[1:-1]
+
+        # Compare the latest snapshot with the new price and insert to history
+
+        if last_history != price:
+            new_history = price + (datetime.now(),)
+            cursor_history.execute(query_insert_to_history, new_history)
+
+        # insert new price to prices
+        cursor.execute(query_insert_to_prices, price)
+
+        # commit and task done
         cnx.commit()
-        print("commit")
+
+        cursor_history.close()
         cursor.close()
 
         prices.task_done()
