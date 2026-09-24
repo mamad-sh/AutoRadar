@@ -40,7 +40,49 @@ LIMIT %s OFFSET %s;
 
 @app.get("/cars/{car_code}")
 async def get_car(car_code: str):
-    pass
+    conn = pool.get_connection()
+    cursor = conn.cursor(dictionary=True)
+    query = """SELECT cars.code,
+    cars.brand,
+    cars.brand_fa,
+    cars.trim,
+    cars.title,
+    cars.year,
+    cars.mileage,
+    cars.location,
+    cars.body_color,
+    cars.body_status,
+    cars.body_type,
+    cars.body_type_fa,
+    cars.fuel,
+    cars.transmission,
+    cars.description,
+    cars.url,
+    cars.modified_date,
+    cars.dealer_id,
+    prices.price,
+    prices.prepayment,
+    prices.payment,
+    prices.prepayment_primary,
+    prices.prepayment_secondary,
+    prices.payment_primary,
+    prices.delivery_days,
+    prices.month_number,
+    dealers.type,
+    dealers.address,
+    dealers.name,
+    dealers.score 
+    FROM cars
+    JOIN prices ON cars.code = prices.car_code
+    LEFT JOIN dealers ON cars.dealer_id = dealers.id
+    WHERE code = %s;
+"""
+    cursor.execute(query, (car_code,))
+    car = cursor.fetchone()
+    car["modified_date"] = str(car["modified_date"])
+    if car["score"] is not None:
+        car["score"] = float(car["score"])
+    return JSONResponse(car, status_code=status.HTTP_200_OK)
 
 
 @app.get("/cars/search")
